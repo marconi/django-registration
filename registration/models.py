@@ -71,8 +71,7 @@ class RegistrationManager(models.Manager):
                 return user
         return False
 
-    def create_inactive_user(self, username, email, password,
-                             site, send_email=True, request=None):
+    def create_inactive_user(self, email, password, site, send_email=True, request=None, **kwargs):
         """
         Create a new, inactive ``User``, generate a
         ``RegistrationProfile`` and email its activation key to the
@@ -84,8 +83,14 @@ class RegistrationManager(models.Manager):
         it will be passed to the email template.
 
         """
-        new_user = UserModel().objects.create_user(username, email, password)
+        new_user = UserModel().objects.create_user(email, password)
         new_user.is_active = False
+
+        # populate extra fields
+        for key, val in kwargs.items():
+            if hasattr(new_user, key):
+                setattr(new_user, key, val)
+
         new_user.save()
 
         registration_profile = self.create_profile(new_user)
@@ -102,18 +107,15 @@ class RegistrationManager(models.Manager):
 
         The activation key for the ``RegistrationProfile`` will be a
         SHA1 hash, generated from a combination of the ``User``'s
-        username and a random salt.
-
+        email and a random salt.
         """
         salt = hashlib.sha1(six.text_type(random.random()).encode('ascii')).hexdigest()[:5]
         salt = salt.encode('ascii')
-        not_get_username = not hasattr(user, 'get_username')  # django<=1.4.15
-        username = user.username if not_get_username else user.get_username()
-        if isinstance(username, six.text_type):
-            username = username.encode('utf-8')
-        activation_key = hashlib.sha1(salt+username).hexdigest()
-        return self.create(user=user,
-                           activation_key=activation_key)
+        email = user.email
+        if isinstance(email, six.text_type):
+            email = email.encode('utf-8')
+        activation_key = hashlib.sha1(salt+email).hexdigest()
+        return self.create(user=user, activation_key=activation_key)
 
     def delete_expired_users(self):
         """
@@ -221,7 +223,7 @@ class RegistrationProfile(models.Model):
         """
         expiration_date = datetime.timedelta(days=settings.ACCOUNT_ACTIVATION_DAYS)
         return (self.activation_key == self.ACTIVATED or
-                (self.user.date_joined + expiration_date <= datetime_now()))
+                (self.user.created + expiration_date <= datetime_now()))
     activation_key_expired.boolean = True
 
     def send_activation_email(self, site, request=None):
@@ -286,11 +288,11 @@ class RegistrationProfile(models.Model):
             'site': site,
         })
         subject = getattr(settings, 'REGISTRATION_EMAIL_SUBJECT_PREFIX', '') + \
-                  render_to_string('registration/activation_email_subject.txt', ctx_dict)
+                  render_to_string('registration/activation_email_subject.txt', ctx_dict).strip()
         # Email subject *must not* contain newlines
         subject = ''.join(subject.splitlines())
 
-        message_txt = render_to_string('registration/activation_email.txt', ctx_dict)
+        message_txt = render_to_string('registration/activation_email.txt', ctx_dict).strip()
         email_message = EmailMultiAlternatives(subject, message_txt, settings.DEFAULT_FROM_EMAIL, [self.user.email])
 
         try:
